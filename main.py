@@ -59,6 +59,43 @@ class Data_Spider():
             save_to_xlsx(note_list, file_path)
 
 
+    def spider_homefeed_recommend_notes(self, category: str, cookies_str: str, base_path: dict, save_choice: str, excel_name: str = '', require_num: int = 20, proxies=None):
+        """
+        爬取首页推荐的笔记信息
+        :param category: 首页频道名称，例如 all
+        :param cookies_str: cookies
+        :param base_path: 保存路径
+        :param save_choice: 保存方式，all/media/excel
+        :param excel_name: 保存到 excel 时的文件名
+        :param require_num: 需要获取的笔记数量
+        :param proxies: 代理
+        """
+        if (save_choice == 'all' or save_choice == 'excel') and excel_name == '':
+            raise ValueError('excel_name 不能为空')
+        note_list = []
+        try:
+            success, msg, notes = self.xhs_apis.get_homefeed_recommend_by_num(category, require_num, cookies_str, proxies)
+            if success:
+                for note in notes:
+                    if note.get('model_type') != 'note':
+                        continue
+                    note_id = note.get('id')
+                    xsec_token = note.get('xsec_token')
+                    if not note_id or not xsec_token:
+                        continue
+                    note_url = f"https://www.xiaohongshu.com/explore/{note_id}?xsec_token={xsec_token}"
+                    if note.get('xsec_source'):
+                        note_url += f"&xsec_source={note['xsec_source']}"
+                    note_list.append(note_url)
+            self.spider_some_note(note_list, cookies_str, base_path, save_choice, excel_name, proxies)
+        except Exception as e:
+            success = False
+            msg = e
+            note_list = []
+        logger.info(f'爬取首页推荐笔记 {category}: {success}, msg: {msg}')
+        return note_list, success, msg
+
+
     def spider_user_all_note(self, user_url: str, cookies_str: str, base_path: dict, save_choice: str, excel_name: str = '', proxies=None):
         """
         爬取一个用户的所有笔记
@@ -277,6 +314,10 @@ if __name__ == '__main__':
     user_url = 'https://www.xiaohongshu.com/user/profile/69c4fc8c000000003303adf1?xsec_token=ABmhpPjqearxVZo3OKLVcDM3p9i9HZSdaHWKp_CPzWXSg%3D=&xsec_source=pc_feed'
     # data_spider.spider_user_all_note(user_url, cookies_str, base_path, 'all')
     data_spider.spider_user_self_data(user_url, cookies_str, base_path, file_prefix='self')
+
+    # 2.3 爬取首页推荐的笔记信息
+    # category 取值示例：all、美食、旅行 等
+    data_spider.spider_homefeed_recommend_notes('all', cookies_str, base_path, 'all', 'home_recommend', require_num=20)
 
     # 2.1 如果你只想爬取“当前登录账号”的作品 + 点赞 + 收藏
     # 请把 user_url 替换成你自己的用户主页 URL，并确保该 URL 包含 xsec_token
