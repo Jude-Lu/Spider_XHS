@@ -6,6 +6,12 @@ from xhs_utils.common_util import init
 from xhs_utils.data_util import handle_note_info, download_note, save_to_xlsx
 
 
+def save_json(data, file_path):
+    with open(file_path, mode='w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    logger.info(f'数据保存至 {file_path}')
+
+
 class Data_Spider():
     def __init__(self):
         self.xhs_apis = XHS_Apis()
@@ -110,6 +116,141 @@ class Data_Spider():
         logger.info(f'搜索关键词 {query} 笔记: {success}, msg: {msg}')
         return note_list, success, msg
 
+    def spider_note_all_comments(self, note_url: str, cookies_str: str, base_path: dict, file_prefix: str = 'note', proxies=None):
+        """
+        爬取笔记的全部评论
+        :param note_url: 笔记链接，需要包含 xsec_token
+        :param cookies_str: cookies
+        :param base_path: 保存路径
+        :param file_prefix: 文件名前缀
+        """
+        try:
+            success, msg, comment_list = self.xhs_apis.get_note_all_comment(note_url, cookies_str, proxies)
+            note_id = os.path.basename(note_url.split('?')[0])
+            file_path = os.path.abspath(os.path.join(base_path['excel'], f'{file_prefix}_{note_id}_comments.json'))
+            if success:
+                save_json(comment_list, file_path)
+        except Exception as e:
+            success = False
+            msg = e
+            comment_list = None
+        logger.info(f'爬取笔记评论 {note_url}: {success}, msg: {msg}')
+        return comment_list, success, msg
+
+    def spider_user_all_related_info(self, user_url: str, cookies_str: str, base_path: dict, file_prefix: str = 'user', fetch_comments: bool = False, proxies=None):
+        """
+        爬取用户相关信息：作品、喜欢、收藏，可选爬取全部笔记评论
+        :param user_url: 用户主页链接，需要包含 xsec_token
+        :param cookies_str: cookies
+        :param base_path: 保存路径
+        :param file_prefix: 文件名前缀
+        :param fetch_comments: 是否爬取用户所有作品的全部评论
+        """
+        try:
+            url_parse = os.path.basename(user_url.split('?')[0])
+            user_id = url_parse
+            # 用户信息
+            success, msg, user_info = self.xhs_apis.get_user_info(user_id, cookies_str, proxies)
+            if not success:
+                raise Exception(msg)
+            # 作品
+            success, msg, all_note_info = self.xhs_apis.get_user_all_notes(user_url, cookies_str, proxies)
+            if not success:
+                raise Exception(msg)
+            note_urls = [f"https://www.xiaohongshu.com/explore/{item['note_id']}?xsec_token={item['xsec_token']}" for item in all_note_info]
+            # 喜欢
+            success, msg, like_notes = self.xhs_apis.get_user_all_like_note_info(user_url, cookies_str, proxies)
+            if not success:
+                raise Exception(msg)
+            # 收藏
+            success, msg, collect_notes = self.xhs_apis.get_user_all_collect_note_info(user_url, cookies_str, proxies)
+            if not success:
+                raise Exception(msg)
+            result = {
+                'user_info': user_info,
+                'notes': all_note_info,
+                'liked_notes': like_notes,
+                'collected_notes': collect_notes,
+            }
+            if fetch_comments:
+                note_comments = {}
+                for note_url in note_urls:
+                    note_id = os.path.basename(note_url.split('?')[0])
+                    comments, _, _ = self.spider_note_all_comments(note_url, cookies_str, base_path, file_prefix=f'{file_prefix}_{note_id}', proxies=proxies)
+                    note_comments[note_url] = comments
+                result['note_comments'] = note_comments
+            file_path = os.path.abspath(os.path.join(base_path['excel'], f'{file_prefix}_{user_id}_related.json'))
+            save_json(result, file_path)
+        except Exception as e:
+            success = False
+            msg = e
+            result = None
+        logger.info(f'爬取用户相关信息 {user_url}: {success}, msg: {msg}')
+        return result, success, msg
+
+    def spider_self_account_activity(self, cookies_str: str, base_path: dict, file_prefix: str = 'account', proxies=None):
+        """
+        爬取当前登录账号的通知类信息：评论/@ 提醒、赞和收藏、新增关注
+        :param cookies_str: cookies
+        :param base_path: 保存路径
+        :param file_prefix: 文件名前缀
+        """
+        try:
+            success, msg, mentions = self.xhs_apis.get_all_metions(cookies_str, proxies)
+            if not success:
+                raise Exception(msg)
+            success, msg, likes_collects = self.xhs_apis.get_all_likesAndcollects(cookies_str, proxies)
+            if not success:
+                raise Exception(msg)
+            success, msg, connections = self.xhs_apis.get_all_new_connections(cookies_str, proxies)
+            if not success:
+                raise Exception(msg)
+            result = {
+                'mentions': mentions,
+                'likes_and_collects': likes_collects,
+                'new_connections': connections,
+            }
+            file_path = os.path.abspath(os.path.join(base_path['excel'], f'{file_prefix}_activity.json'))
+            save_json(result, file_path)
+        except Exception as e:
+            success = False
+            msg = e
+            result = None
+        logger.info(f'爬取当前登录账号活动信息: {success}, msg: {msg}')
+        return result, success, msg
+
+    def spider_user_self_data(self, user_url: str, cookies_str: str, base_path: dict, file_prefix: str = 'self', proxies=None):
+        """
+        爬取当前登录账号的用户作品 / 点赞 / 收藏
+        :param user_url: 当前登录账号的用户主页链接，需要包含 xsec_token
+        :param cookies_str: cookies
+        :param base_path: 保存路径
+        :param file_prefix: 文件名前缀
+        """
+        try:
+            # 爬取当前账号自己的作品详情（包含每条笔记的详情 + 媒体文件）
+            _, _, note_list = self.spider_user_all_note(user_url, cookies_str, base_path, 'all', excel_name=file_prefix, proxies=proxies)
+            # 爬取当前账号自己的点赞笔记列表
+            success, msg, like_notes = self.xhs_apis.get_user_all_like_note_info(user_url, cookies_str, proxies)
+            if not success:
+                raise Exception(msg)
+            # 爬取当前账号自己的收藏笔记列表
+            success, msg, collect_notes = self.xhs_apis.get_user_all_collect_note_info(user_url, cookies_str, proxies)
+            if not success:
+                raise Exception(msg)
+            result = {
+                'liked_notes': like_notes,
+                'collected_notes': collect_notes,
+            }
+            file_path = os.path.abspath(os.path.join(base_path['excel'], f'{file_prefix}_likes_collects.json'))
+            save_json(result, file_path)
+        except Exception as e:
+            success = False
+            msg = e
+            result = None
+        logger.info(f'爬取当前登录账号作品/点赞/收藏 {user_url}: {success}, msg: {msg}')
+        return result, success, msg
+
 if __name__ == '__main__':
     """
         此文件为爬虫的入口文件，可以直接运行
@@ -130,11 +271,19 @@ if __name__ == '__main__':
     notes = [
         r'https://www.xiaohongshu.com/explore/683fe17f0000000023017c6a?xsec_token=ABBr_cMzallQeLyKSRdPk9fwzA0torkbT_ubuQP1ayvKA=&xsec_source=pc_user',
     ]
-    data_spider.spider_some_note(notes, cookies_str, base_path, 'all', 'test')
+    # data_spider.spider_some_note(notes, cookies_str, base_path, 'all', 'test')
 
     # 2 爬取用户的所有笔记信息 用户链接 如下所示 注意此url会过期！
-    user_url = 'https://www.xiaohongshu.com/user/profile/64c3f392000000002b009e45?xsec_token=AB-GhAToFu07JwNk_AMICHnp7bSTjVz2beVIDBwSyPwvM=&xsec_source=pc_feed'
-    data_spider.spider_user_all_note(user_url, cookies_str, base_path, 'all')
+    user_url = 'https://www.xiaohongshu.com/user/profile/69c4fc8c000000003303adf1?xsec_token=ABmhpPjqearxVZo3OKLVcDM3p9i9HZSdaHWKp_CPzWXSg%3D=&xsec_source=pc_feed'
+    # data_spider.spider_user_all_note(user_url, cookies_str, base_path, 'all')
+    data_spider.spider_user_self_data(user_url, cookies_str, base_path, file_prefix='self')
+
+    # 2.1 如果你只想爬取“当前登录账号”的作品 + 点赞 + 收藏
+    # 请把 user_url 替换成你自己的用户主页 URL，并确保该 URL 包含 xsec_token
+    # data_spider.spider_user_self_data(user_url, cookies_str, base_path, file_prefix='self')
+
+    # 2.2 爬取当前登录账号的通知类数据：评论/@提醒、赞收藏、新增关注
+    # data_spider.spider_self_account_activity(cookies_str, base_path, file_prefix='self_activity')
 
     # 3 搜索指定关键词的笔记
     query = "榴莲"
@@ -149,4 +298,4 @@ if __name__ == '__main__':
     #     "latitude": 39.9725,
     #     "longitude": 116.4207
     # }
-    data_spider.spider_some_search_note(query, query_num, cookies_str, base_path, 'all', sort_type_choice, note_type, note_time, note_range, pos_distance, geo=None)
+    # data_spider.spider_some_search_note(query, query_num, cookies_str, base_path, 'all', sort_type_choice, note_type, note_time, note_range, pos_distance, geo=None)
