@@ -96,6 +96,77 @@ class Data_Spider():
         logger.info(f'爬取首页推荐笔记 {category}: {success}, msg: {msg}')
         return note_list, success, msg
 
+    def get_homefeed_recommend_note_urls(self, category: str, cookies_str: str, require_num: int = 20, proxies=None):
+        """
+        获取首页推荐笔记的 note_url 列表
+        :param category: 首页频道名称，例如 all
+        :param cookies_str: cookies
+        :param require_num: 需要获取的笔记数量
+        :param proxies: 代理
+        """
+        note_urls = []
+        try:
+            success, msg, notes = self.xhs_apis.get_homefeed_recommend_by_num(category, require_num, cookies_str, proxies)
+            if success:
+                for note in notes:
+                    if note.get('model_type') != 'note':
+                        continue
+                    note_id = note.get('id')
+                    xsec_token = note.get('xsec_token')
+                    if not note_id or not xsec_token:
+                        continue
+                    note_url = f"https://www.xiaohongshu.com/explore/{note_id}?xsec_token={xsec_token}"
+                    if note.get('xsec_source'):
+                        note_url += f"&xsec_source={note['xsec_source']}"
+                    note_urls.append(note_url)
+        except Exception as e:
+            success = False
+            msg = e
+            note_urls = []
+        logger.info(f'获取首页推荐笔记 URL {category}: {success}, msg: {msg}')
+        return note_urls, success, msg
+
+    def spider_homefeed_recommend_note_comments(self, category: str, cookies_str: str, base_path: dict, file_prefix: str = 'home', require_num: int = 20, comment_mode: str = 'all', proxies=None):
+        """
+        爬取首页推荐笔记的评论
+        :param category: 首页频道名称，例如 all
+        :param cookies_str: cookies
+        :param base_path: 保存路径
+        :param file_prefix: 文件名前缀
+        :param require_num: 需要获取的笔记数量
+        :param comment_mode: 评论抓取模式，all=全部评论，top=仅一级评论
+        :param proxies: 代理
+        """
+        note_urls, success, msg = self.get_homefeed_recommend_note_urls(category, cookies_str, require_num, proxies)
+        if not success:
+            return None, success, msg
+
+        results = []
+        for note_url in note_urls:
+            note_id = os.path.basename(note_url.split('?')[0])
+            note_info = None
+            comments = None
+            success, msg, note_info = self.spider_note(note_url, cookies_str, proxies)
+            if not success:
+                logger.warning(f'获取首页笔记详情失败 {note_url}: {msg}')
+            comments, _, _ = self.spider_note_all_comments(
+                note_url,
+                cookies_str,
+                base_path,
+                file_prefix=f'{file_prefix}_{note_id}',
+                comment_mode=comment_mode,
+                proxies=proxies
+            )
+            results.append({
+                'note_url': note_url,
+                'note_info': note_info,
+                'comments': comments,
+            })
+
+        file_path = os.path.abspath(os.path.join(base_path['excel'], f'{file_prefix}_{category}_notes_comments_{comment_mode}.json'))
+        save_json(results, file_path)
+        return results, True, 'success'
+
 
     def spider_user_all_note(self, user_url: str, cookies_str: str, base_path: dict, save_choice: str, excel_name: str = '', proxies=None):
         """
@@ -367,8 +438,12 @@ if __name__ == '__main__':
     # 2.3 爬取首页推荐的笔记信息
     # category 取值示例：all、美食、旅行 等
     # data_spider.spider_homefeed_recommend_notes('all', cookies_str, base_path, 'all', 'home_recommend', require_num=20)
+    # 2.3.1 爬取首页推荐笔记的全部评论
+    # data_spider.spider_homefeed_recommend_note_comments('all', cookies_str, base_path, file_prefix='home', require_num=20, comment_mode='all')
+    # 2.3.2 爬取首页推荐笔记的一级评论
+    data_spider.spider_homefeed_recommend_note_comments('all', cookies_str, base_path, file_prefix='home', require_num=20, comment_mode='top')
     # 2.4 爬取用户所有笔记详情，并抓取每条笔记的全部评论
-    data_spider.spider_user_all_note_comments(user_url, cookies_str, base_path, file_prefix='user_comments', comment_mode='all')
+    # data_spider.spider_user_all_note_comments(user_url, cookies_str, base_path, file_prefix='user_comments', comment_mode='all')
     # 2.5 只抓取用户所有笔记的一级评论
     # data_spider.spider_user_all_note_comments(user_url, cookies_str, base_path, file_prefix='user_comments_top', comment_mode='top')
     # 2.1 如果你只想爬取“当前登录账号”的作品 + 点赞 + 收藏
